@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { parseStickmanProject, StickmanProjectData } from 'stickman-animator-r3f';
 
+// NEW:
+import { parseStickmanProject, ParsedStickmanProject as StickmanProjectData } from 'stickman-animator-r3f';
 export function useAssetLoader() {
   const [projectData, setProjectData] = useState<StickmanProjectData | null>(null);
   const [loading, setLoading] = useState(true);
