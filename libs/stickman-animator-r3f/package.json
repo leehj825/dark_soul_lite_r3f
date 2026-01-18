@@ -1,0 +1,12 @@
+{
+  "name": "stickman-animator-r3f",
+  "version": "1.0.0",
+  "main": "stickman-runtime.umd.js",
+  "module": "stickman-runtime.es.js",
+  "types": "index.d.ts", 
+  "peerDependencies": {
+    "react": "*",
+    "react-dom": "*",
+    "@react-three/fiber": "*"
+  }
+}

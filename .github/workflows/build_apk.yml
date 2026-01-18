@@ -1,0 +1,58 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      # 1. Setup Java 21 (Since your project requires it)
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      # 2. Setup Node.js (To build the React/Vite app)
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 3. Install Dependencies
+      # This handles your local 'libs' folder automatically if it is committed to the repo
+      - name: Install Dependencies
+        run: npm ci
+
+      # 4. Build Web Assets
+      - name: Build Web App
+        run: npm run build
+
+      # 5. Sync Capacitor
+      # Ensures the 'dist' folder is copied to the 'android' folder
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      # 6. Build APK with Gradle
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew assembleDebug
+
+      # 7. Upload Artifact
+      # This saves the APK so you can download it from GitHub
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk

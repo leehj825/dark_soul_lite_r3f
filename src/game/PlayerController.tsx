@@ -1,8 +1,10 @@
 import { useRef, useState, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useKeyboardControls } from '@react-three/drei';
-import { Group, Vector3, Quaternion, Matrix4 } from 'three';
-import { Stickman, StickmanProjectData } from 'stickman-animator-r3f';
+import { Group, Vector3, Quaternion } from 'three';
+
+// NEW:
+import { StickmanPlayer as Stickman, ParsedStickmanProject as StickmanProjectData } from 'stickman-animator-r3f';
 
 interface PlayerControllerProps {
   projectData: StickmanProjectData | null;
@@ -16,7 +18,8 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
   // Expose the local ref to the parent
   useImperativeHandle(ref, () => localGroup.current as Group);
 
-  const [sub] = useKeyboardControls();
+  // Use 'get' to poll input state inside the loop
+  const [, get] = useKeyboardControls();
   const { camera } = useThree();
 
   // Animation state
@@ -32,11 +35,11 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
   const cameraDirection = useMemo(() => new Vector3(), []);
   const targetQuaternion = useMemo(() => new Quaternion(), []);
 
-  useFrame((state, delta) => {
+  useFrame((_, delta) => {
     if (!localGroup.current) return;
 
     // 1. Get Input
-    const { forward, backward, left, right, run } = sub((state) => state);
+    const { forward, backward, left, right, run } = get() as { forward: boolean; backward: boolean; left: boolean; right: boolean; run: boolean };
 
     // 2. Determine Movement Speed
     const speed = run ? RUN_SPEED : WALK_SPEED;
