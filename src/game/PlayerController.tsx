@@ -21,6 +21,7 @@ interface PlayerControllerProps {
 export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ projectData, inputState, lookState, actionState }, ref) => {
   const localGroup = useRef<Group>(null);
   const pivotGroup = useRef<Group>(null); 
+  const stickmanRef = useRef<Group>(null);
   
   useImperativeHandle(ref, () => localGroup.current as Group);
   const [, get] = useKeyboardControls(); 
@@ -67,7 +68,6 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
         });
         if (reverse) {
           const totalDuration = newClip.duration;
-          // IMPORTANT: Do not use random IDs here to prevent flickering
           newClip.id = `${newClip.id}_rev`; 
           newClip.keyframes.forEach((kf: any) => { kf.timestamp = totalDuration - kf.timestamp; });
           newClip.keyframes.sort((a: any, b: any) => a.timestamp - b.timestamp);
@@ -111,8 +111,6 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
       const offset = progressRef.current * targetClip.duration;
       finalClip = {
         ...targetClip,
-        // We use a stable ID. If the ID changes every frame, it will flicker.
-        // Syncing by keyframe modification is okay as long as we don't trigger a remount.
         keyframes: targetClip.keyframes.map((kf: any) => {
           let newTime = kf.timestamp - offset;
           if (newTime < 0) newTime += targetClip.duration;
@@ -131,19 +129,36 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
   useFrame((_state, delta) => {
     if (!localGroup.current || !pivotGroup.current || !clipLibrary.idle || !dynamicData) return;
 
-    // Update Progress
+    // --- MATERIAL TRAVERSAL (Makes stickman greenish) ---
+    if (stickmanRef.current) {
+        stickmanRef.current.traverse((child: any) => {
+          if (child.isMesh) {
+            child.material.color.set("#44ff44"); // Bright Green color
+            if (child.material.emissive) {
+                child.material.emissive.set("#002200");
+            }
+          }
+        });
+    }
+
+    // Update Progress tracking for phase sync
     const currentClip = (dynamicData as any).clips.find((c: any) => c.id === activeClipId);
     if (currentClip && currentClip.duration > 0) {
       progressRef.current = (progressRef.current + delta / currentClip.duration) % 1;
     }
 
-    // --- 1. JUMP ---
-    if (actionState.jump && !isJumpingRef.current) {
-      isJumpingRef.current = true;
-      actionState.jump = false; 
-      updateAnimation(clipLibrary.jump, false); 
-      currentStateRef.current = "jump";
-      setTimeout(() => { isJumpingRef.current = false; }, 650); 
+    // --- 1. JUMP (Ignoring if already active) ---
+    if (actionState.jump) {
+        if (!isJumpingRef.current && currentStateRef.current !== "jump") {
+            isJumpingRef.current = true;
+            currentStateRef.current = "jump";
+            updateAnimation(clipLibrary.jump, false); 
+            setTimeout(() => { 
+                isJumpingRef.current = false; 
+                // Locomotion logic below will reset state to idle/walk next frame
+            }, 650); 
+        }
+        actionState.jump = false; // Always clear signal to prevent queuing
     }
 
     if (lookState && lookState.deltaX !== 0) {
@@ -204,7 +219,7 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
       targetVisualRotation = 0;
     }
 
-    // --- 3. PHYSICS ---
+    // --- 3. PHYSICS & ROTATION ---
     currentRotationAmount.current = MathUtils.lerp(currentRotationAmount.current, targetVisualRotation, 0.15);
     tempEuler.set(0, MODEL_FACING_OFFSET + currentRotationAmount.current, 0);
     pivotGroup.current.setRotationFromEuler(tempEuler);
@@ -220,8 +235,7 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
   return (
     <group ref={localGroup}>
       <group ref={pivotGroup}>
-        {/* We use a specific color for the group to tint the children if supported */}
-        <group>
+        <group ref={stickmanRef}>
           {dynamicData && activeClipId && (
             <Stickman
               key={activeClipId.split('_sync')[0]} 
@@ -231,16 +245,15 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
             />
           )}
 
-          {/* This is the secret: A very high intensity light with a small distance 
-              It acts like a 'skin' of green light over the white stickman lines */}
+          {/* Strong green point light creates a neon skin effect */}
           <pointLight 
             color="#00ff44" 
             intensity={10} 
-            distance={2} 
+            distance={2.5} 
             position={[0, 1, 0]} 
           />
           
-          {/* Add a secondary 'Rim' light to make the edges of the limbs glow green */}
+          {/* Rim light helps define the limbs against the green floor */}
           <pointLight 
             color="#ccff00" 
             intensity={5} 
