@@ -1,5 +1,5 @@
 import { Canvas } from '@react-three/fiber';
-import { KeyboardControls, KeyboardControlsEntry } from '@react-three/drei';
+import { KeyboardControls, KeyboardControlsEntry, Environment, Sky, ContactShadows  } from '@react-three/drei';
 import { Suspense, useMemo, useRef, useState } from 'react';
 import { Group } from 'three';
 import { PlayerController, ActionState } from './game/PlayerController'; // Import ActionState
@@ -16,7 +16,6 @@ enum Controls {
   run = 'run',
 }
 
-// GameScene now accepts actionState to pass to PlayerController
 function GameScene({ joystickState, lookState, actionState }: { 
   joystickState: JoystickState; 
   lookState: LookState; 
@@ -25,30 +24,73 @@ function GameScene({ joystickState, lookState, actionState }: {
   const { projectData, loading, error } = useAssetLoader();
   const playerRef = useRef<Group>(null);
 
-  if (loading) return null;
-  if (error) return null;
+  // Reference pillars to confirm movement speed and direction
+  const pillars = useMemo(() => {
+    return [...Array(12)].map((_, i) => ({
+      position: [
+        Math.sin((i / 12) * Math.PI * 2) * 15, 
+        1, 
+        Math.cos((i / 12) * Math.PI * 2) * 15
+      ] as [number, number, number],
+      color: i % 2 === 0 ? "#ff00ff" : "#00ffff"
+    }));
+  }, []);
+
+  if (loading || error) return null;
 
   return (
     <>
-      <directionalLight position={[10, 10, 5]} intensity={1.5} castShadow />
-      <ambientLight intensity={0.5} />
-      <gridHelper args={[100, 100]} position={[0, 0, 0]} />
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.1, 0]} receiveShadow>
-        <planeGeometry args={[100, 100]} />
-        <meshStandardMaterial color="#222" />
+      {/* Visual Enhancements */}
+      <Environment preset="city" />
+      <Sky sunPosition={[100, 20, 100]} />
+      <ambientLight intensity={0.4} />
+      <directionalLight 
+        position={[10, 20, 10]} 
+        intensity={1.5} 
+        castShadow 
+        shadow-camera-left={-20}
+        shadow-camera-right={20}
+        shadow-camera-top={20}
+        shadow-camera-bottom={-20}
+      />
+
+      {/* Solid Floor Plane (Replaces Grid) */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
+        <planeGeometry args={[200, 200]} />
+        <meshStandardMaterial color="#151515" roughness={0.8} />
       </mesh>
+
+      {/* Reference Pillars */}
+      {pillars.map((p, i) => (
+        <mesh key={i} position={p.position} castShadow>
+          <cylinderGeometry args={[0.3, 0.3, 2]} />
+          <meshStandardMaterial emissive={p.color} emissiveIntensity={1} color={p.color} />
+        </mesh>
+      ))}
+
+      {/* Shadows for Jump Confirmation */}
+      <ContactShadows 
+        position={[0, 0.01, 0]} 
+        opacity={0.6} 
+        scale={30} 
+        blur={2} 
+        far={10} 
+      />
 
       <PlayerController 
         ref={playerRef} 
         projectData={projectData} 
         inputState={joystickState} 
         lookState={lookState}
-        actionState={actionState} // Pass the shared state
+        actionState={actionState}
       />
+      
       <ThirdPersonCamera target={playerRef} lookState={lookState} />
     </>
   );
 }
+
+// ... Rest of your App() function remains exactly the same as you provided ...
 
 function App() {
   const map = useMemo<KeyboardControlsEntry<Controls>[]>(() => [
