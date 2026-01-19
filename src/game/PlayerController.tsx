@@ -135,7 +135,7 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
           if (child.isMesh) {
             child.material.color.set("#44ff44"); // Bright Green color
             if (child.material.emissive) {
-                child.material.emissive.set("#002200");
+                child.material.emissive.set("#00cc00");
             }
           }
         });
@@ -245,21 +245,6 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
             />
           )}
 
-          {/* Strong green point light creates a neon skin effect */}
-          <pointLight 
-            color="#00ff44" 
-            intensity={10} 
-            distance={2.5} 
-            position={[0, 1, 0]} 
-          />
-          
-          {/* Rim light helps define the limbs against the green floor */}
-          <pointLight 
-            color="#ccff00" 
-            intensity={5} 
-            distance={3} 
-            position={[0, 0.5, 1]} 
-          />
         </group>
       </group>
     </group>
