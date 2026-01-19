@@ -36,7 +36,7 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
   const isJumpingRef = useRef(false);
   const jumpStartTimeRef = useRef(0);
   const JUMP_DURATION = 0.65; // seconds
-  const JUMP_HEIGHT = 2.0;
+  const JUMP_HEIGHT = 1.5;
 
   const currentRotationAmount = useRef(0);
   const tempEuler = useMemo(() => new Euler(), []);
