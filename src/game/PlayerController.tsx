@@ -1,46 +1,10 @@
 import { useRef, useState, useMemo, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { useKeyboardControls, Points, PointMaterial } from '@react-three/drei';
+import { useKeyboardControls } from '@react-three/drei';
 import { Group, Vector3, MathUtils, Euler } from 'three';
 import { StickmanPlayer as Stickman, ParsedStickmanProject as StickmanProjectData } from 'stickman-animator-r3f';
 import { JoystickState } from './Joystick';
 import { LookState } from './TouchLook';
-
-// --- LANDING DUST COMPONENT ---
-function LandingDust({ position }: { position: Vector3 }) {
-  const points = useMemo(() => {
-    const p = new Float32Array(20 * 3); // More particles for better feel
-    for (let i = 0; i < 20; i++) {
-      p[i * 3] = (Math.random() - 0.5) * 2.0;
-      p[i * 3 + 1] = Math.random() * 0.5;
-      p[i * 3 + 2] = (Math.random() - 0.5) * 2.0;
-    }
-    return p;
-  }, []);
-
-  const ref = useRef<any>();
-  useFrame((_state, delta) => {
-    if (ref.current) {
-      ref.current.opacity -= delta * 2.0;
-      ref.current.scale += delta * 1.5; // Expand faster
-    }
-  });
-
-  return (
-    <group position={position}>
-      <Points positions={points}>
-        <PointMaterial
-          ref={ref}
-          transparent
-          color="#aaaaaa"
-          size={0.15}
-          sizeAttenuation={true}
-          depthWrite={false}
-        />
-      </Points>
-    </group>
-  );
-}
 
 export interface ActionState {
   jump: boolean;
@@ -57,8 +21,6 @@ interface PlayerControllerProps {
 export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ projectData, inputState, lookState, actionState }, ref) => {
   const localGroup = useRef<Group>(null);
   const pivotGroup = useRef<Group>(null); 
-  const [dustPos, setDustPos] = useState<Vector3 | null>(null);
-  const worldPosVec = useMemo(() => new Vector3(), []); // Reusable vector for performance
   
   useImperativeHandle(ref, () => localGroup.current as Group);
   const [, get] = useKeyboardControls(); 
@@ -75,6 +37,9 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
   const tempEuler = useMemo(() => new Euler(), []);
   const moveDirection = useMemo(() => new Vector3(), []);
   const currentRotationY = useRef(0);
+
+  // --- PHASE SYNC REF ---
+  const progressRef = useRef(0); 
 
   useEffect(() => {
     if (!projectData) return;
@@ -97,9 +62,12 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
       newClip.duration = (originalClip.duration - startTime) * ratio;
 
       if (newClip.keyframes) {
-        newClip.keyframes.forEach((kf: any) => { kf.timestamp = (kf.timestamp - startTime) * ratio; });
+        newClip.keyframes.forEach((kf: any) => { 
+            kf.timestamp = (kf.timestamp - startTime) * ratio; 
+        });
         if (reverse) {
           const totalDuration = newClip.duration;
+          // IMPORTANT: Do not use random IDs here to prevent flickering
           newClip.id = `${newClip.id}_rev`; 
           newClip.keyframes.forEach((kf: any) => { kf.timestamp = totalDuration - kf.timestamp; });
           newClip.keyframes.sort((a: any, b: any) => a.timestamp - b.timestamp);
@@ -112,7 +80,7 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
 
     setClipLibrary({
       idle: findClip('idle'),
-      jump: processClip(findClip('jump'), 1.5, false, 0.6), 
+      jump: processClip(findClip('jump'), 1.8, false, 0.5), 
       walk: findClip('walking'), 
       walkBack: findClip('walking backwards'),
       walkLeft: findClip('left strafe walking'),
@@ -134,38 +102,48 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
     }
   }, [projectData]);
 
-  const updateAnimation = (targetClip: any) => {
+  const updateAnimation = (targetClip: any, useSync = false) => {
     if (!targetClip || !projectData) return;
+    
+    let finalClip = targetClip;
+
+    if (useSync && targetClip.duration > 0) {
+      const offset = progressRef.current * targetClip.duration;
+      finalClip = {
+        ...targetClip,
+        // We use a stable ID. If the ID changes every frame, it will flicker.
+        // Syncing by keyframe modification is okay as long as we don't trigger a remount.
+        keyframes: targetClip.keyframes.map((kf: any) => {
+          let newTime = kf.timestamp - offset;
+          if (newTime < 0) newTime += targetClip.duration;
+          return { ...kf, timestamp: newTime };
+        }).sort((a: any, b: any) => a.timestamp - b.timestamp)
+      };
+    }
+
     setDynamicData({
       ...projectData,
-      clips: [targetClip, ...(projectData as any).clips.filter((c: any) => c.id !== targetClip.id)]
+      clips: [finalClip, ...(projectData as any).clips.filter((c: any) => c.id !== finalClip.id)]
     });
-    setActiveClipId(targetClip.id);
+    setActiveClipId(finalClip.id);
   };
 
   useFrame((_state, delta) => {
-    if (!localGroup.current || !pivotGroup.current || !clipLibrary.idle) return;
+    if (!localGroup.current || !pivotGroup.current || !clipLibrary.idle || !dynamicData) return;
 
-    // --- 1. JUMP TRIGGER ---
+    // Update Progress
+    const currentClip = (dynamicData as any).clips.find((c: any) => c.id === activeClipId);
+    if (currentClip && currentClip.duration > 0) {
+      progressRef.current = (progressRef.current + delta / currentClip.duration) % 1;
+    }
+
+    // --- 1. JUMP ---
     if (actionState.jump && !isJumpingRef.current) {
       isJumpingRef.current = true;
       actionState.jump = false; 
-      updateAnimation(clipLibrary.jump);
+      updateAnimation(clipLibrary.jump, false); 
       currentStateRef.current = "jump";
-      
-      // Trigger Dust EARLY (when feet hit the ground visually)
-      setTimeout(() => {
-        if (localGroup.current) {
-          localGroup.current.getWorldPosition(worldPosVec);
-          setDustPos(worldPosVec.clone());
-          setTimeout(() => setDustPos(null), 800);
-        }
-      }, 500); // Trigger at 500ms instead of 700ms
-
-      // Unlock animation state LATER (after landing impact finish)
-      setTimeout(() => { 
-        isJumpingRef.current = false; 
-      }, 700); 
+      setTimeout(() => { isJumpingRef.current = false; }, 650); 
     }
 
     if (lookState && lookState.deltaX !== 0) {
@@ -184,11 +162,12 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
     if (joy.active) { inputZ += joy.y; inputX += joy.x; }
 
     const inputMagnitude = Math.sqrt(inputX * inputX + inputZ * inputZ);
-    const isMoving = inputMagnitude > 0.1;
+    const isMoving = inputMagnitude > 0.15;
     const isRunning = actionState.run || kb.run;
 
     let targetVisualRotation = 0;
 
+    // --- 2. ANIMATION SELECTION ---
     if (!isJumpingRef.current) {
       let nextState = "idle";
       let targetClip = clipLibrary.idle;
@@ -215,14 +194,17 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
            }
         }
       }
+      
       if (nextState !== currentStateRef.current) {
+         const isMovementTransition = currentStateRef.current !== "idle" && nextState !== "idle";
          currentStateRef.current = nextState;
-         updateAnimation(targetClip);
+         updateAnimation(targetClip, isMovementTransition);
       }
     } else {
       targetVisualRotation = 0;
     }
 
+    // --- 3. PHYSICS ---
     currentRotationAmount.current = MathUtils.lerp(currentRotationAmount.current, targetVisualRotation, 0.15);
     tempEuler.set(0, MODEL_FACING_OFFSET + currentRotationAmount.current, 0);
     pivotGroup.current.setRotationFromEuler(tempEuler);
@@ -230,29 +212,28 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
     if (isMoving) {
         moveDirection.set(inputX, 0, inputZ).normalize();
         moveDirection.applyQuaternion(localGroup.current.quaternion);
-        const speed = isRunning ? 6.0 : 2.0;
+        const speed = isRunning ? 6.0 : 2.5;
         localGroup.current.position.addScaledVector(moveDirection, speed * delta);
     }
   });
 
   return (
-    <>
-      {dustPos && <LandingDust key={Date.now()} position={dustPos} />}
-      <group ref={localGroup}>
-        <group ref={pivotGroup}>
-          <group>
-            {dynamicData && activeClipId && (
-              <Stickman
-                key={activeClipId}
-                projectData={dynamicData}
-                activeClipId={activeClipId}
-                isPlaying={true}
-              />
-            )}
-            <pointLight color="#00ffcc" intensity={5} distance={3} position={[0, 1, 0]} />
-          </group>
+    <group ref={localGroup}>
+      <group ref={pivotGroup}>
+        <group>
+          {dynamicData && activeClipId && (
+            <Stickman
+              // Removing the random Date.now() from key to stop flicker
+              // We only want to remount if the BASE ID changes (e.g. Walk -> Run)
+              key={activeClipId.split('_sync')[0]} 
+              projectData={dynamicData}
+              activeClipId={activeClipId}
+              isPlaying={true}
+            />
+          )}
+          <pointLight color="#00ffcc" intensity={5} distance={3} position={[0, 1, 0]} />
         </group>
       </group>
-    </>
+    </group>
   );
 });
