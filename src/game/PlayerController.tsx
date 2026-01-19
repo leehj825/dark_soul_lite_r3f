@@ -220,18 +220,33 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
   return (
     <group ref={localGroup}>
       <group ref={pivotGroup}>
+        {/* We use a specific color for the group to tint the children if supported */}
         <group>
           {dynamicData && activeClipId && (
             <Stickman
-              // Removing the random Date.now() from key to stop flicker
-              // We only want to remount if the BASE ID changes (e.g. Walk -> Run)
               key={activeClipId.split('_sync')[0]} 
               projectData={dynamicData}
               activeClipId={activeClipId}
               isPlaying={true}
             />
           )}
-          <pointLight color="#00ffcc" intensity={5} distance={3} position={[0, 1, 0]} />
+
+          {/* This is the secret: A very high intensity light with a small distance 
+              It acts like a 'skin' of green light over the white stickman lines */}
+          <pointLight 
+            color="#00ff44" 
+            intensity={10} 
+            distance={2} 
+            position={[0, 1, 0]} 
+          />
+          
+          {/* Add a secondary 'Rim' light to make the edges of the limbs glow green */}
+          <pointLight 
+            color="#ccff00" 
+            intensity={5} 
+            distance={3} 
+            position={[0, 0.5, 1]} 
+          />
         </group>
       </group>
     </group>
