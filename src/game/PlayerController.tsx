@@ -1,216 +1,243 @@
 import { useRef, useState, useMemo, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { useKeyboardControls, Html } from '@react-three/drei';
-import { Group, Vector3 } from 'three';
+import { useKeyboardControls } from '@react-three/drei';
+import { Group, Vector3, MathUtils, Euler } from 'three';
 import { StickmanPlayer as Stickman, ParsedStickmanProject as StickmanProjectData } from 'stickman-animator-r3f';
 import { JoystickState } from './Joystick';
 import { LookState } from './TouchLook';
+
+export interface ActionState {
+  jump: boolean;
+  run: boolean;
+}
 
 interface PlayerControllerProps {
   projectData: StickmanProjectData | null;
   inputState: JoystickState;
   lookState: LookState;
+  actionState: ActionState;
 }
 
-export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ projectData, inputState, lookState }, ref) => {
+export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ projectData, inputState, lookState, actionState }, ref) => {
   const localGroup = useRef<Group>(null);
-  useImperativeHandle(ref, () => localGroup.current as Group);
+  const pivotGroup = useRef<Group>(null); 
   
+  useImperativeHandle(ref, () => localGroup.current as Group);
   const [, get] = useKeyboardControls(); 
 
-  // --- 1. CLIP LIBRARY ---
-  // Store the 4 clips permanently so we can grab them anytime
-  const [clipLibrary, setClipLibrary] = useState<any>(null);
-  const [animIds, setAnimIds] = useState({ idle: '', run: '', strafeLeft: '', strafeRight: '' });
+  const MODEL_FACING_OFFSET = Math.PI; 
 
-  // --- 2. DYNAMIC STATE ---
-  // We will generate a NEW projectData object every time we switch animations
+  const [clipLibrary, setClipLibrary] = useState<any>({});
   const [dynamicData, setDynamicData] = useState<StickmanProjectData | null>(null);
   const [activeClipId, setActiveClipId] = useState<string | null>(null);
-  const [renderKey, setRenderKey] = useState(0); // Forces remount
-  const [debugStatus, setDebugStatus] = useState("Initializing...");
+  
+  const currentStateRef = useRef("idle"); 
+  const isJumpingRef = useRef(false);
+  const currentRotationAmount = useRef(0);
+  const tempEuler = useMemo(() => new Euler(), []);
+  const moveDirection = useMemo(() => new Vector3(), []);
+  const currentRotationY = useRef(0);
 
-  // Load the clips once on startup
   useEffect(() => {
     if (!projectData) return;
     const pd = projectData as any;
     const allClips = pd.clips || [];
-
-    const findClip = (name: string) => allClips.find((c: any) => c.name.toLowerCase().includes(name.toLowerCase()));
-
-    // Find the 4 clips we need
-    const lib = {
-      idle: findClip('Standard Idle'),
-      run: findClip('Standard Run'),
-      left: findClip('left strafe'),
-      right: findClip('right strafe')
+    
+    const findClip = (name: string) => {
+      const exact = allClips.find((c: any) => c.name.trim() === name);
+      return exact || allClips.find((c: any) => c.name.toLowerCase().includes(name.toLowerCase()));
     };
 
-    // Save them for later
-    setClipLibrary(lib);
+    const processClip = (originalClip: any, speedFactor: number, reverse: boolean = false, startTime = 0) => {
+      if (!originalClip) return null;
+      
+      // 1. Filter out keyframes that happen before our new startTime
+      // 2. Clone the remaining keyframes
+      const filteredKeyframes = originalClip.keyframes
+        .filter((kf: any) => kf.timestamp >= startTime)
+        .map((kf: any) => ({ ...kf }));
 
-    const ids = {
-      idle: lib.idle?.id || '',
-      run: lib.run?.id || '',
-      strafeLeft: lib.left?.id || '',
-      strafeRight: lib.right?.id || ''
+      const newClip = {
+        ...originalClip,
+        keyframes: filteredKeyframes
+      };
+
+      const ratio = 1 / speedFactor;
+      
+      // Update duration based on trimmed length
+      newClip.duration = (originalClip.duration - startTime) * ratio;
+
+      if (newClip.keyframes) {
+        // 3. Shift timestamps so the new start is at 0, then apply speed ratio
+        newClip.keyframes.forEach((kf: any) => { 
+          kf.timestamp = (kf.timestamp - startTime) * ratio; 
+        });
+
+        if (reverse) {
+          const totalDuration = newClip.duration;
+          newClip.id = `${newClip.id}_rev`; 
+          newClip.keyframes.forEach((kf: any) => {
+            kf.timestamp = totalDuration - kf.timestamp;
+          });
+          newClip.keyframes.sort((a: any, b: any) => a.timestamp - b.timestamp);
+          
+          const offset = newClip.keyframes[0].timestamp;
+          newClip.keyframes.forEach((kf: any) => {
+            kf.timestamp = Math.max(0, kf.timestamp - offset);
+          });
+        }
+      }
+      return newClip;
     };
-    setAnimIds(ids);
 
-    // Initial Setup: Force Idle
-    if (lib.idle) {
-      updateAnimation(lib.idle, ids.idle, "IDLE", pd);
-    } else {
-      setDebugStatus("Error: Idle Clip Missing");
+    setClipLibrary({
+      idle: findClip('idle'),
+      jump: processClip(findClip('jump'), 1.5, false, 0.6), // Speed 2.0
+      walk: findClip('walking'), 
+      walkBack: findClip('walking backwards'),
+      walkLeft: findClip('left strafe walking'),
+      walkRight: findClip('right strafe walking'),
+      run: findClip('running'), 
+      runBack: findClip('running backward'),
+      runLeft: findClip('left strafe'),
+      runRight: findClip('right strafe'),
+      walkLeftRev: processClip(findClip('left strafe walking'), 1.0, true),
+      walkRightRev: processClip(findClip('right strafe walking'), 1.0, true),
+      runLeftRev: processClip(findClip('left strafe'), 1.0, true),
+      runRightRev: processClip(findClip('right strafe'), 1.0, true),
+    });
+
+    if (findClip('idle')) {
+      setActiveClipId(findClip('idle').id);
+      setDynamicData(pd);
+      currentStateRef.current = "idle";
     }
-
   }, [projectData]);
 
-  // --- HELPER: SWAP & RESTART ---
-  // This function creates a new data object where 'targetClip' is at Index 0
-  const updateAnimation = (targetClip: any, targetId: string, label: string, baseData: any) => {
-    if (!targetClip || !baseData) return;
-
-    // 1. Create a clean list with targetClip FIRST
-    const otherClips = baseData.clips.filter((c: any) => c.id !== targetId);
-    const reorderedClips = [targetClip, ...otherClips];
-
-    // 2. Create new data object
-    const newData = { ...baseData, clips: reorderedClips };
-
-    // 3. Apply updates
-    setDynamicData(newData);
-    setActiveClipId(targetId);
-    setDebugStatus(`Playing: ${label}`);
-    
-    // 4. Increment key to FORCE RE-RENDER
-    setRenderKey(prev => prev + 1);
+  const updateAnimation = (targetClip: any) => {
+    if (!targetClip || !projectData) return;
+    setDynamicData({
+      ...projectData,
+      clips: [targetClip, ...(projectData as any).clips.filter((c: any) => c.id !== targetClip.id)]
+    });
+    setActiveClipId(targetClip.id);
   };
 
-  // --- 3. PHYSICS ---
-  const MOVE_SPEED = 6.0;
-  const moveDirection = useMemo(() => new Vector3(), []);
-  const currentRotationY = useRef(0);
-  
-  // Track current state to avoid spamming updates
-  const currentStateRef = useRef("idle"); 
-  const isRunningRef = useRef(false);
-
   useFrame((_, delta) => {
-    if (!localGroup.current || !clipLibrary || !projectData) return;
+    if (!localGroup.current || !pivotGroup.current || !clipLibrary.idle) return;
 
-    // A. LOOK
+    // --- 1. JUMP TRIGGER ---
+    if (actionState.jump && !isJumpingRef.current) {
+      isJumpingRef.current = true;
+      actionState.jump = false; 
+      updateAnimation(clipLibrary.jump);
+      currentStateRef.current = "jump";
+      
+      // Match the duration of your processed jump (roughly 0.5s - 0.7s)
+      setTimeout(() => { 
+        isJumpingRef.current = false; 
+        // Clearing this allows the move/idle logic to take over next frame
+      }, 700); 
+    }
+
     if (lookState && lookState.deltaX !== 0) {
        currentRotationY.current += lookState.deltaX * 5.0; 
        lookState.deltaX = 0; 
        localGroup.current.rotation.y = currentRotationY.current;
-       localGroup.current.updateMatrixWorld();
     }
 
-    // B. INPUT
-    const kb = get() as { forward: boolean; backward: boolean; left: boolean; right: boolean; run: boolean };
+    const kb = get() as any;
     const joy = inputState;
-    let inputX = 0; 
-    let inputZ = 0;
-
-    if (kb.forward) inputZ += 1;
+    let inputX = 0, inputZ = 0;
+    if (kb.forward) inputZ += 1; 
     if (kb.backward) inputZ -= 1;
     if (kb.right) inputX += 1;
     if (kb.left) inputX -= 1;
-    if (joy.active) {
-      inputZ += joy.y; 
-      inputX += joy.x;
-    }
+    if (joy.active) { inputZ += joy.y; inputX += joy.x; }
 
     const inputMagnitude = Math.sqrt(inputX * inputX + inputZ * inputZ);
-    if (inputMagnitude > 1) {
-        inputX /= inputMagnitude;
-        inputZ /= inputMagnitude;
+    const isMoving = inputMagnitude > 0.1;
+    const isRunning = actionState.run || kb.run;
+
+    // --- 2. ANIMATION SELECTION (Locked during jump) ---
+    if (!isJumpingRef.current) {
+      let nextState = "idle";
+      let targetClip = clipLibrary.idle;
+      let targetVisualRotation = 0;
+
+      if (isMoving) {
+        const leanAngle = (inputX / (inputMagnitude || 1)) * (Math.PI / 4);
+
+        if (inputZ < -0.3) {
+           nextState = isRunning ? "run" : "walk";
+           targetClip = isRunning ? clipLibrary.run : clipLibrary.walk;
+           targetVisualRotation = -leanAngle; 
+        } else if (inputZ > 0.3) {
+           nextState = isRunning ? "runBack" : "walkBack";
+           targetClip = isRunning ? clipLibrary.runBack : clipLibrary.walkBack;
+           targetVisualRotation = leanAngle; 
+        } else {
+           //const useReverseStrafe = inputZ > 0.1; 
+           /*if (inputX > 0) { 
+              nextState = isRunning ? (useReverseStrafe ? "runLeftRev" : "runRight") : (useReverseStrafe ? "walkLeftRev" : "walkRight");
+              targetClip = isRunning ? (useReverseStrafe ? clipLibrary.runLeftRev : clipLibrary.runRight) : (useReverseStrafe ? clipLibrary.walkLeftRev : clipLibrary.walkRight);
+              targetVisualRotation = useReverseStrafe ? -Math.PI / 4 : Math.PI / 4;
+           } else { 
+              nextState = isRunning ? (useReverseStrafe ? "runRightRev" : "runLeft") : (useReverseStrafe ? "walkRightRev" : "walkLeft");
+              targetClip = isRunning ? (useReverseStrafe ? clipLibrary.runRightRev : clipLibrary.runLeft) : (useReverseStrafe ? clipLibrary.walkRightRev : clipLibrary.walkLeft);
+              targetVisualRotation = useReverseStrafe ? Math.PI / 4 : -Math.PI / 4;
+           }*/
+           if (inputX > 0) { 
+              nextState = isRunning ? ("runRight") : ("walkRight");
+              targetClip = isRunning ? (clipLibrary.runRight) : (clipLibrary.walkRight);
+              targetVisualRotation = Math.PI / 4;
+           } else { 
+              nextState = isRunning ? ("runLeft") : ("walkLeft");
+              targetClip = isRunning ? (clipLibrary.runLeft) : (clipLibrary.walkLeft);
+              targetVisualRotation = -Math.PI / 4;
+           }
+        }
+      } else {
+        // While jumping, we force the target rotation to 0 (Forward)
+        targetVisualRotation = 0;
+      }
+
+      // Update rotation
+      currentRotationAmount.current = MathUtils.lerp(currentRotationAmount.current, targetVisualRotation, 0.15);
+      
+      // Update state if changed
+      if (nextState !== currentStateRef.current) {
+         currentStateRef.current = nextState;
+         updateAnimation(targetClip);
+      }
     }
 
-    // C. SMOOTHING
-    if (inputMagnitude > 0.1) isRunningRef.current = true;
-    if (inputMagnitude < 0.05) isRunningRef.current = false;
-    const isMoving = isRunningRef.current;
-
-    // D. DETERMINE TARGET STATE
-    let nextState = "idle";
-    let targetClip = clipLibrary.idle;
-    let targetId = animIds.idle;
+    // --- 3. PHYSICS / POSITION (Always active, even during jump) ---
+    tempEuler.set(0, MODEL_FACING_OFFSET + currentRotationAmount.current, 0);
+    pivotGroup.current.setRotationFromEuler(tempEuler);
 
     if (isMoving) {
-        if (Math.abs(inputX) > Math.abs(inputZ)) {
-            if (inputX > 0) {
-                nextState = "right";
-                targetClip = clipLibrary.right;
-                targetId = animIds.strafeRight;
-            } else {
-                nextState = "left";
-                targetClip = clipLibrary.left;
-                targetId = animIds.strafeLeft;
-            }
-        } else {
-            nextState = "run";
-            targetClip = clipLibrary.run;
-            targetId = animIds.run;
-        }
-    }
-
-    // E. TRIGGER UPDATE (Only if state changed)
-    if (nextState !== currentStateRef.current) {
-        currentStateRef.current = nextState;
-        // Call the helper to reorder data and restart
-        updateAnimation(targetClip, targetId, nextState.toUpperCase(), projectData);
-    }
-
-    // F. MOVE
-    if (isMoving && inputMagnitude > 0.05) {
-        moveDirection.set(0, 0, 0);
-        const forward = new Vector3(0, 0, 1).applyQuaternion(localGroup.current.quaternion);
-        const right = new Vector3(1, 0, 0).applyQuaternion(localGroup.current.quaternion);
-        moveDirection.addScaledVector(forward, inputZ); 
-        moveDirection.addScaledVector(right, inputX);
-        const moveDistance = MOVE_SPEED * delta;
-        localGroup.current.position.addScaledVector(moveDirection, moveDistance);
+        moveDirection.set(inputX, 0, inputZ).normalize();
+        moveDirection.applyQuaternion(localGroup.current.quaternion);
+        const speed = isRunning ? 6.0 : 2.0;
+        localGroup.current.position.addScaledVector(moveDirection, speed * delta);
     }
   });
 
-  const bodyRef = useRef(document.body);
-
   return (
-    <group ref={localGroup} position={[0, 0, 0]}>
-      <group rotation={[0, Math.PI, 0]}>
-        
-        {/* DYNAMIC RENDER: 
-            We pass 'dynamicData' (where current animation is #1).
-            We use 'renderKey' to force React to destroy and recreate the component.
-            This forces the new animation to play instantly.
-        */}
-        {dynamicData && activeClipId && (
-          <Stickman
-            key={renderKey} 
-            projectData={dynamicData}
-            activeClipId={activeClipId}
-            isPlaying={true}
-          />
-        )}
-        
+    <group ref={localGroup}>
+      <group ref={pivotGroup}>
+        <group>
+          {dynamicData && activeClipId && (
+            <Stickman
+              key={activeClipId}
+              projectData={dynamicData}
+              activeClipId={activeClipId}
+              isPlaying={true}
+            />
+          )}
+        </group>
       </group>
-
-      {/* Debug Status */}
-      <Html position={[0, 2.0, 0]} center portal={bodyRef} zIndexRange={[99999999, 0]}>
-        <div style={{
-           background: 'rgba(0,0,0,0.6)', 
-           color: '#fff', 
-           padding: '4px 8px', 
-           borderRadius: '4px',
-           fontFamily: 'monospace',
-           fontSize: '10px',
-           pointerEvents: 'none',
-        }}>
-          {debugStatus}
-        </div>
-      </Html>
     </group>
   );
 });
