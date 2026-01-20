@@ -137,9 +137,9 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
     if (stickmanRef.current) {
         stickmanRef.current.traverse((child: any) => {
           if (child.isMesh) {
-            child.material.color.set("#44ff44"); // Bright Green color
+            child.material.color.set("#00aa00"); // Vivid dark green
             if (child.material.emissive) {
-                child.material.emissive.set("#00cc00");
+                child.material.emissive.set("#006600");
             }
           }
         });
