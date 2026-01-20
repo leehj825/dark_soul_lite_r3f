@@ -34,6 +34,10 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
   
   const currentStateRef = useRef("idle"); 
   const isJumpingRef = useRef(false);
+  const jumpStartTimeRef = useRef(0);
+  const JUMP_DURATION = 0.65; // seconds
+  const JUMP_HEIGHT = 1.3;
+
   const currentRotationAmount = useRef(0);
   const tempEuler = useMemo(() => new Euler(), []);
   const moveDirection = useMemo(() => new Vector3(), []);
@@ -126,16 +130,16 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
     setActiveClipId(finalClip.id);
   };
 
-  useFrame((_state, delta) => {
+  useFrame((state, delta) => {
     if (!localGroup.current || !pivotGroup.current || !clipLibrary.idle || !dynamicData) return;
 
     // --- MATERIAL TRAVERSAL (Makes stickman greenish) ---
     if (stickmanRef.current) {
         stickmanRef.current.traverse((child: any) => {
           if (child.isMesh) {
-            child.material.color.set("#44ff44"); // Bright Green color
+            child.material.color.set("#00aa00"); // Vivid dark green
             if (child.material.emissive) {
-                child.material.emissive.set("#002200");
+                child.material.emissive.set("#006600");
             }
           }
         });
@@ -152,11 +156,12 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
         if (!isJumpingRef.current && currentStateRef.current !== "jump") {
             isJumpingRef.current = true;
             currentStateRef.current = "jump";
+            jumpStartTimeRef.current = state.clock.elapsedTime;
             updateAnimation(clipLibrary.jump, false); 
             setTimeout(() => { 
                 isJumpingRef.current = false; 
                 // Locomotion logic below will reset state to idle/walk next frame
-            }, 650); 
+            }, JUMP_DURATION * 1000);
         }
         actionState.jump = false; // Always clear signal to prevent queuing
     }
@@ -230,6 +235,21 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
         const speed = isRunning ? 6.0 : 2.5;
         localGroup.current.position.addScaledVector(moveDirection, speed * delta);
     }
+
+    // --- 4. VERTICAL JUMP MOTION ---
+    if (stickmanRef.current) {
+        if (isJumpingRef.current) {
+            const elapsed = state.clock.elapsedTime - jumpStartTimeRef.current;
+            if (elapsed < JUMP_DURATION) {
+                const progress = elapsed / JUMP_DURATION;
+                // Sine wave for smooth arc (0 -> 1 -> 0)
+                stickmanRef.current.position.y = Math.sin(progress * Math.PI) * JUMP_HEIGHT;
+            }
+        } else {
+            // Smoothly reset height when not jumping
+            stickmanRef.current.position.y = MathUtils.lerp(stickmanRef.current.position.y, 0, 0.2);
+        }
+    }
   });
 
   return (
@@ -245,21 +265,6 @@ export const PlayerController = forwardRef<Group, PlayerControllerProps>(({ proj
             />
           )}
 
-          {/* Strong green point light creates a neon skin effect */}
-          <pointLight 
-            color="#00ff44" 
-            intensity={10} 
-            distance={2.5} 
-            position={[0, 1, 0]} 
-          />
-          
-          {/* Rim light helps define the limbs against the green floor */}
-          <pointLight 
-            color="#ccff00" 
-            intensity={5} 
-            distance={3} 
-            position={[0, 0.5, 1]} 
-          />
         </group>
       </group>
     </group>

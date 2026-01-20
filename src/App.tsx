@@ -192,7 +192,7 @@ function App() {
       {/* Controls */}
       <div style={{
           position: 'absolute',
-          right: '30px',
+          right: '80px',
           bottom: '100px',
           display: 'flex',
           flexDirection: 'column',
